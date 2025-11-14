@@ -3,4 +3,16 @@ nul
 .claude/
 *.log
 .DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
 

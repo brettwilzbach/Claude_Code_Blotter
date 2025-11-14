@@ -1,0 +1,318 @@
+"""Data normalization module - maps source columns to canonical schema."""
+import pandas as pd
+from typing import Optional, Dict, Any
+from .util import slug
+
+
+class SSCNormalizer:
+    """Normalize SS&C position data to canonical format."""
+
+    @staticmethod
+    def normalize(df: pd.DataFrame, config: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
+        """
+        Map SS&C columns to canonical names and compute derived fields.
+
+        Input columns: Portfolio, Location Account, Investment ID,
+        Investment Description, Strategy, Local CCY, Prior Quote,
+        Current Quote, Long MV, Short MV, Daily Market PnL, MTD Market PnL
+
+        Args:
+            df: Input dataframe from SS&C
+            config: Optional configuration dictionary with filters and mappings
+        """
+        # Get portfolio filter from config (default to 'CPAM' for backwards compatibility)
+        portfolio_filter = 'CPAM'
+        hedge_strategies = [
+            'CPAM__HYBRID OPTIONS F1',
+            'CPAM__CDX IG OPTIONS F1',
+            'CPAM__CDX HY OPTIONS F1',
+            'CPAM__LISTED OPTIONS'
+        ]
+
+        if config:
+            portfolio_filter = config.get('filters', {}).get('portfolio_filter', 'CPAM')
+            # Get hedge strategies from config (they are the keys in strategy_to_family mapping)
+            strategy_mapping = config.get('hedge_classification', {}).get('strategy_to_family', {})
+            if strategy_mapping:
+                # Only include strategies that start with the portfolio prefix
+                hedge_strategies = [
+                    strategy for strategy in strategy_mapping.keys()
+                    if strategy.startswith(portfolio_filter + '__')
+                ]
+
+        # Filter to only specified portfolio (the hedge book)
+        df = df[df['Portfolio'] == portfolio_filter].copy()
+
+        # Filter to only derivative hedge strategies (exclude cash and underlying CMBS/ABS)
+        if hedge_strategies:
+            df = df[df['Strategy'].isin(hedge_strategies)].copy()
+
+        if df.empty:
+            # Return empty dataframe with expected columns if no CPAM_HEDGE rows found
+            return pd.DataFrame(columns=[
+                'portfolio', 'location_account', 'investment_id', 'investment_description',
+                'strategy', 'local_ccy', 'price_prior', 'price_current', 'long_mv', 'short_mv',
+                'pnl_1d_usd', 'pnl_mtd_usd', 'mv_ssc_usd', 'name_clean', 'source', 'manual_flag'
+            ])
+
+        normalized = pd.DataFrame()
+
+        # Direct mappings
+        normalized['portfolio'] = df['Portfolio']
+        normalized['location_account'] = df['Location Account']
+        normalized['investment_id'] = df['Investment ID']
+        normalized['investment_description'] = df['Investment Description']
+        normalized['strategy'] = df['Strategy']
+        normalized['local_ccy'] = df['Local CCY']
+        normalized['price_prior'] = df['Prior Quote']
+        normalized['price_current'] = df['Current Quote']
+        normalized['long_mv'] = df['Long MV']
+        normalized['short_mv'] = df['Short MV']
+        normalized['pnl_1d_usd'] = df['Dly Mkt P&L']
+        normalized['pnl_mtd_usd'] = df['MTD Mkt P&L']
+
+        # Identifiers for joining
+        if 'Bloomberg ID' in df.columns:
+            normalized['id_bb_sec_num_des'] = df['Bloomberg ID']
+        if 'BloombergUniqueID' in df.columns:
+            normalized['bloomberg_unique_id'] = df['BloombergUniqueID']
+        if 'Cusip' in df.columns:
+            normalized['cusip'] = df['Cusip']
+
+        # Computed fields
+        # Net MV = Long MV + Short MV (keeps signs; some are linked spreads)
+        normalized['mv_ssc_usd'] = normalized['long_mv'] + normalized['short_mv']
+
+        # Clean name for joining
+        normalized['name_clean'] = df['Investment Description'].apply(slug)
+
+        # Add source tag
+        normalized['source'] = 'ssc'
+        normalized['manual_flag'] = False
+
+        return normalized
+
+
+class MARSNormalizer:
+    """Normalize MARS risk data to canonical format."""
+
+    @staticmethod
+    def normalize(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Map MARS fields to canonical schema.
+
+        Actual MARS columns: Ticker, Description, DV01 Port Ccy, Vol,
+        Delta, Gamma, Vega, Theta, MktPx, Asset Type, Call/Put,
+        Strike, Expiry Date, Underlying, Bloomberg Deal Id
+        """
+        # Skip rows that are all NaN (header rows)
+        df = df.dropna(how='all')
+
+        normalized = pd.DataFrame()
+
+        # Identifier fields
+        if 'Ticker' in df.columns:
+            normalized['id_bb_sec_num_des'] = df['Ticker']
+            normalized['secid'] = df['Ticker']
+
+        if 'Bloomberg Deal Id' in df.columns:
+            normalized['bloomberg_deal_id'] = df['Bloomberg Deal Id']
+
+        if 'Description' in df.columns:
+            normalized['name'] = df['Description']
+            normalized['name_clean'] = df['Description'].apply(lambda x: slug(x) if pd.notna(x) else '')
+
+        # Risk metrics - DV01 sign is already in hedge convention
+        if 'DV01 Port Ccy' in df.columns:
+            normalized['dv01_usd'] = pd.to_numeric(df['DV01 Port Ccy'], errors='coerce')
+
+        if 'Credit DV01' in df.columns:
+            normalized['cs01_usd'] = pd.to_numeric(df['Credit DV01'], errors='coerce')
+
+        if 'Vol' in df.columns:
+            normalized['vol_90d'] = pd.to_numeric(df['Vol'], errors='coerce')
+
+        # Price fields
+        if 'MktPx' in df.columns:
+            normalized['px_mid'] = pd.to_numeric(df['MktPx'], errors='coerce')
+
+        # Greeks
+        if 'Delta' in df.columns:
+            normalized['delta_spx'] = pd.to_numeric(df['Delta'], errors='coerce')
+
+        if 'Gamma' in df.columns:
+            normalized['gamma'] = pd.to_numeric(df['Gamma'], errors='coerce')
+
+        if 'Vega' in df.columns:
+            normalized['vega_spx'] = pd.to_numeric(df['Vega'], errors='coerce')
+
+        if 'Theta' in df.columns:
+            normalized['theta'] = pd.to_numeric(df['Theta'], errors='coerce')
+
+        # Option/derivative details
+        if 'Asset Type' in df.columns:
+            normalized['asset_type'] = df['Asset Type']
+
+        if 'Call/Put' in df.columns:
+            normalized['call_put'] = df['Call/Put']
+
+        if 'Strike' in df.columns:
+            normalized['strike_1'] = pd.to_numeric(df['Strike'], errors='coerce')
+
+        if 'Expiry Date' in df.columns:
+            normalized['expiry'] = df['Expiry Date']
+
+        if 'Underlying' in df.columns:
+            normalized['underlying_symbol'] = df['Underlying']
+
+        # Market value and PnL
+        if 'MktVal Port Ccy' in df.columns:
+            normalized['mv_mars_usd'] = pd.to_numeric(df['MktVal Port Ccy'], errors='coerce')
+
+        if '1DayP&L Port Ccy' in df.columns:
+            normalized['pnl_1d_mars'] = pd.to_numeric(df['1DayP&L Port Ccy'], errors='coerce')
+
+        normalized['source'] = 'mars'
+
+        return normalized
+
+
+class BloombergNormalizer:
+    """Normalize Bloomberg API reference data."""
+
+    @staticmethod
+    def normalize(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Map Bloomberg fields to canonical schema.
+
+        PX_LAST priority: Use PX_LAST if present, else px_close_1d
+        """
+        normalized = pd.DataFrame()
+
+        # Identifier
+        if 'id_bb_sec_num_des' in df.columns:
+            normalized['id_bb_sec_num_des'] = df['id_bb_sec_num_des']
+
+        if 'name' in df.columns:
+            normalized['name'] = df['name']
+            normalized['name_clean'] = df['name'].apply(slug)
+
+        # Price - prefer PX_LAST, fallback to px_close_1d
+        if 'PX_LAST' in df.columns:
+            normalized['px_last'] = df['PX_LAST']
+        elif 'px_close_1d' in df.columns:
+            normalized['px_last'] = df['px_close_1d']
+
+        # Additional price fields
+        if 'px_mid' in df.columns:
+            normalized['px_mid'] = df['px_mid']
+
+        if 'px_close_1d' in df.columns:
+            normalized['px_close_1d'] = df['px_close_1d']
+
+        # Reference data
+        if 'maturity' in df.columns:
+            normalized['maturity'] = df['maturity']
+
+        if 'yld_ytm_ask' in df.columns:
+            normalized['yld_ytm_ask'] = df['yld_ytm_ask']
+
+        if 'sw_spread' in df.columns:
+            normalized['sw_spread'] = df['sw_spread']
+
+        if 'cds_flat_spread' in df.columns:
+            normalized['cds_flat_spread'] = df['cds_flat_spread']
+
+        normalized['source'] = 'bloomberg'
+
+        return normalized
+
+
+class ManualNormalizer:
+    """Normalize manual Bolt blotter entries."""
+
+    @staticmethod
+    def normalize(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Map manual entry fields to canonical schema.
+        Manual entries enrich positions with pretty names and additional metadata.
+        """
+        if df.empty:
+            return pd.DataFrame()
+
+        normalized = pd.DataFrame()
+
+        # Identifiers for linking to SS&C and Bloomberg
+        if 'investment_id' in df.columns:
+            normalized['investment_id'] = df['investment_id']
+
+        if 'bloomberg_id' in df.columns:
+            normalized['id_bb_sec_num_des'] = df['bloomberg_id']
+
+        # Pretty name (this will override SS&C investment_description)
+        if 'pretty_name' in df.columns:
+            normalized['pretty_name'] = df['pretty_name']
+            normalized['investment_description'] = df['pretty_name']
+            normalized['name_clean'] = df['pretty_name'].apply(lambda x: slug(x) if pd.notna(x) else '')
+
+        # Hedge classification
+        if 'hedge_family' in df.columns:
+            normalized['hedge_family'] = df['hedge_family']
+
+        if 'hedge_label' in df.columns:
+            normalized['hedge_label'] = df['hedge_label']
+
+        if 'strategy' in df.columns:
+            normalized['strategy'] = df['strategy']
+
+        # Trade details (fields not in SS&C/MARS/Bloomberg)
+        if 'underlying_type' in df.columns:
+            normalized['underlying_type'] = df['underlying_type']
+
+        if 'underlying_symbol' in df.columns:
+            normalized['underlying_symbol'] = df['underlying_symbol']
+
+        if 'strike_1' in df.columns:
+            normalized['strike_1'] = pd.to_numeric(df['strike_1'], errors='coerce')
+
+        if 'strike_2' in df.columns:
+            normalized['strike_2'] = pd.to_numeric(df['strike_2'], errors='coerce')
+
+        if 'call_put' in df.columns:
+            normalized['call_put'] = df['call_put']
+
+        if 'expiry' in df.columns:
+            normalized['expiry'] = df['expiry']
+            normalized['maturity'] = df['expiry']  # Map to maturity for consistency
+
+        if 'notional_usd' in df.columns:
+            normalized['notional_usd'] = pd.to_numeric(df['notional_usd'], errors='coerce')
+
+        if 'direction' in df.columns:
+            normalized['direction'] = df['direction']
+
+        # Spread/package linking
+        if 'spread_id' in df.columns:
+            normalized['spread_id'] = df['spread_id']
+            # Mark as spread leg if spread_id is not empty
+            normalized['is_spread_leg'] = (df['spread_id'].notna() & (df['spread_id'] != '')).astype(bool)
+
+        if 'spread_name' in df.columns:
+            normalized['spread_name'] = df['spread_name']
+
+        # Optional overrides
+        if 'dv01_override' in df.columns:
+            dv01_vals = pd.to_numeric(df['dv01_override'], errors='coerce')
+            normalized['dv01_usd'] = dv01_vals
+
+        if 'price_override' in df.columns:
+            price_vals = pd.to_numeric(df['price_override'], errors='coerce')
+            normalized['px_last'] = price_vals
+
+        if 'notes' in df.columns:
+            normalized['notes'] = df['notes']
+
+        normalized['source'] = 'manual'
+        normalized['manual_flag'] = True
+
+        return normalized

@@ -1,0 +1,87 @@
+# Configuration for Hedge Analytics Backend
+
+# File paths for data sources
+# Can be either local file paths or GitHub raw URLs
+file_paths:
+  # Local file paths (alternative to GitHub URLs)
+  # ssc_positions: "SFTP csv/CANNAEPA_DailyPNL_Cost_20251022.csv"
+  # mars_risk: "SFTP csv/bbgMars_sftp20251025.csv"
+  # bloomberg_refs: "SFTP csv/data-1761224634769.csv"
+  
+  # GitHub URLs (uncomment and update with your actual file paths in the repo)
+  # ssc_positions: "https://raw.githubusercontent.com/brettwilzbach/RaDarr_Integration_Hedges/master/path/to/file.csv"
+  # mars_risk: "https://raw.githubusercontent.com/brettwilzbach/RaDarr_Integration_Hedges/master/path/to/mars.csv"
+  # bloomberg_refs: "https://raw.githubusercontent.com/brettwilzbach/RaDarr_Integration_Hedges/master/path/to/bloomberg.csv"
+  
+  # Current local paths (using local files)
+  ssc_positions: "SFTP csv/CANNAEPA_DailyPNL_Cost_20251022.csv"
+  mars_risk: "SFTP csv/bbgMars_sftp20251025.csv"
+  bloomberg_refs: "SFTP csv/data-1761224634769.csv"
+  manual_entries: "SFTP csv/manual_bolt_export.csv"  # Optional - loaded if present
+
+# Data filters
+filters:
+  # Only load positions from this portfolio (column A in SS&C file)
+  portfolio_filter: "CPAM"
+
+# Hedge classification rules
+hedge_classification:
+  # Map strategy names to hedge families
+  strategy_to_family:
+    # SS&C strategy names (actual from CPAM portfolio)
+    "CPAM__HYBRID OPTIONS F1": "Hybrid Options"
+    "CPAM__CDX IG OPTIONS F1": "Vanilla Risk-Off Hedges"
+    "CPAM__CDX HY OPTIONS F1": "Vanilla Risk-Off Hedges"
+    "CPAM__LISTED OPTIONS": "Vanilla Risk-Off Hedges"
+
+    # Generic strategy names (for manual entries)
+    "Credit Hedge": "Vanilla Risk-Off Hedges"
+    "Rate Hedge": "Vanilla Risk-Off Hedges"
+    "Equity Put": "Vanilla Risk-Off Hedges"
+    "Vol Hedge": "Vanilla Risk-Off Hedges"
+    "Dual Digital": "Hybrid Hedges"
+    "Combo Spread": "Hybrid Hedges"
+    "Multi-Asset": "Hybrid Hedges"
+    "Structured": "Hybrid Hedges"
+
+  # Optional: Regex patterns for edge cases
+  # name_patterns:
+  #   - pattern: "CDX.*"
+  #     family: "Vanilla Risk-Off Hedges"
+  #     label_prefix: "CDX"
+  #   - pattern: "SPX.*PUT"
+  #     family: "Vanilla Risk-Off Hedges"
+  #     label_prefix: "SPX Put"
+
+# Column name mappings (for flexibility if CSV headers change)
+column_mappings:
+  ssc:
+    portfolio: "Portfolio"
+    location_account: "Location Account"
+    investment_id: "Investment ID"
+    investment_description: "Investment Description"
+    strategy: "Strategy"
+    local_ccy: "Local CCY"
+    price_prior: "Prior Quote"
+    price_current: "Current Quote"
+    long_mv: "Long MV"
+    short_mv: "Short MV"
+    pnl_1d: "Daily Market PnL"
+    pnl_mtd: "MTD Market PnL"
+
+  mars:
+    id_bb: "id_bb_sec_num_des"
+    dv01: "sw_eqv_bpv"
+    vol_90d: "volatility_90d"
+    px_mid: "px_mid"
+    maturity: "maturity"
+
+  bloomberg:
+    id_bb: "id_bb_sec_num_des"
+    px_last: "PX_LAST"
+    px_close_1d: "px_close_1d"
+    px_mid: "px_mid"
+    maturity: "maturity"
+    yld_ytm_ask: "yld_ytm_ask"
+    sw_spread: "sw_spread"
+    cds_spread: "cds_flat_spread"
